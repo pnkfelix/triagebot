@@ -37,6 +37,7 @@ mod ping;
 mod prioritize;
 mod relabel;
 mod review_submitted;
+mod rfc_merge_pr;
 mod rustc_commits;
 mod shortcut;
 
@@ -240,6 +241,7 @@ command_handlers! {
     ping: Ping,
     prioritize: Prioritize,
     relabel: Relabel,
+    rfc_merge_pr: RfcMergePr,
     major_change: Second,
     shortcut: Shortcut,
     close: Close,

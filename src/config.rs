@@ -18,6 +18,7 @@ lazy_static::lazy_static! {
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct Config {
     pub(crate) relabel: Option<RelabelConfig>,
+    pub(crate) rfc_merge_pr: Option<RfcMergePrConfig>,
     pub(crate) assign: Option<AssignConfig>,
     pub(crate) ping: Option<PingConfig>,
     pub(crate) nominate: Option<NominateConfig>,
@@ -81,6 +82,13 @@ pub(crate) struct AssignConfig {
 pub(crate) struct RelabelConfig {
     #[serde(default)]
     pub(crate) allow_unauthenticated: Vec<String>,
+}
+
+#[derive(PartialEq, Eq, Debug, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct RfcMergePrConfig {
+    #[serde(default)]
+    _empty: (),
 }
 
 #[derive(PartialEq, Eq, Debug, serde::Deserialize)]
@@ -294,6 +302,7 @@ mod tests {
                 relabel: Some(RelabelConfig {
                     allow_unauthenticated: vec!["C-*".into()],
                 }),
+                rfc_merge_pr: None,
                 assign: Some(AssignConfig { _empty: () }),
                 ping: Some(PingConfig { teams: ping_teams }),
                 nominate: Some(NominateConfig {

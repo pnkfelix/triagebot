@@ -9,6 +9,7 @@ pub mod nominate;
 pub mod ping;
 pub mod prioritize;
 pub mod relabel;
+pub mod rfc_merge_pr;
 pub mod second;
 pub mod shortcut;
 
@@ -19,6 +20,7 @@ pub fn find_command_start(input: &str, bot: &str) -> Option<usize> {
 #[derive(Debug, PartialEq)]
 pub enum Command<'a> {
     Relabel(Result<relabel::RelabelCommand, Error<'a>>),
+    RfcMergePr(Result<rfc_merge_pr::RfcMergePrCommand, Error<'a>>),
     Assign(Result<assign::AssignCommand, Error<'a>>),
     Ping(Result<ping::PingCommand, Error<'a>>),
     Nominate(Result<nominate::NominateCommand, Error<'a>>),
@@ -89,6 +91,11 @@ impl<'a> Input<'a> {
         success.extend(parse_single_command(
             relabel::RelabelCommand::parse,
             Command::Relabel,
+            &original_tokenizer,
+        ));
+        success.extend(parse_single_command(
+            rfc_merge_pr::RfcMergePrCommand::parse,
+            Command::RfcMergePr,
             &original_tokenizer,
         ));
         success.extend(parse_single_command(
@@ -183,6 +190,7 @@ impl<'a> Command<'a> {
     pub fn is_ok(&self) -> bool {
         match self {
             Command::Relabel(r) => r.is_ok(),
+            Command::RfcMergePr(r) => r.is_ok(),
             Command::Assign(r) => r.is_ok(),
             Command::Ping(r) => r.is_ok(),
             Command::Nominate(r) => r.is_ok(),
