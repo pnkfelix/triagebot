@@ -1065,6 +1065,58 @@ impl Repository {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct PullRequestId {
+    pub repo: Repository,
+    pub pull_number: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffStatus {
+    Added,
+    Removed,
+    Modified,
+    Renamed,
+    Copied,
+    Changed,
+    Unchanged,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct DiffEntry {
+    pub sha: String,
+    pub filename: String,
+    pub status: DiffStatus,
+    pub additions: usize,
+    pub deletions: usize,
+    pub changes: Option<usize>,
+    pub blob_url: String,
+    pub raw_url: String,
+    pub contents_url: String,
+    pub patch: Option<String>,
+    pub previous_filename: Option<String>,
+}
+
+impl PullRequestId {
+    pub async fn get_file_list(&self, client: &GithubClient) -> anyhow::Result<Vec<DiffEntry>> {
+        let url = self.build_list_files_url();
+        let result = client.get(&url);
+        client.json(result)
+            .await
+            .with_context(|| format!("failed to list files from {}", url))
+    }
+
+    fn build_list_files_url(&self) -> String
+    {
+        format!("{}/repos/{}/pulls/{}/files",
+                Repository::GITHUB_API_URL,
+                self.repo.full_name,
+                self.pull_number
+        )
+    }
+}
+
 pub struct Query<'a> {
     // key/value filter
     pub filters: Vec<(&'a str, &'a str)>,
