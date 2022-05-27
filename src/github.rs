@@ -1099,12 +1099,28 @@ pub struct DiffEntry {
 }
 
 impl PullRequestId {
+    pub async fn get_title(&self, client: &GithubClient) -> anyhow::Result<String> {
+        let url = self.build_issue_url();
+        let result = client.get(&url);
+        client.json(result)
+            .await
+            .with_context(|| format!("failed to get issue data from {}", url))
+            .map(|issue: Issue|issue.title)
+    }
     pub async fn get_file_list(&self, client: &GithubClient) -> anyhow::Result<Vec<DiffEntry>> {
         let url = self.build_list_files_url();
         let result = client.get(&url);
         client.json(result)
             .await
             .with_context(|| format!("failed to list files from {}", url))
+    }
+
+    fn build_issue_url(&self) -> String
+    {
+        format!("{}/repos/{}/issues/{}",
+                Repository::GITHUB_API_URL,
+                self.repo.full_name,
+                self.pull_number)
     }
 
     fn build_list_files_url(&self) -> String
