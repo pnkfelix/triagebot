@@ -41,15 +41,13 @@ impl From<octocrab::Error> for RfcMergePrError {
 impl std::fmt::Display for RfcMergePrError {
     fn fmt(&self, w: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            RfcMergePrError::Anyhow(e) => write!(w, "rfc merge error: {}", e),
-            RfcMergePrError::Octocrab(e) => write!(w, "rfc merge error: {}", e),
+            RfcMergePrError::Anyhow(e) => write!(w, "rfc merge error, anyhow:{}", e),
+            RfcMergePrError::Octocrab(e) => write!(w, "rfc merge error, octocrab: {}", e),
         }
     }
 }
 
 pub async fn merge(pr_num: u64) -> Result<(), RfcMergePrError> {
-    dbg!(pr_num);
-
     let client = Client::new();
     let gh = github::GithubClient::new_with_default_token(client.clone());
     let oc = octocrab::OctocrabBuilder::new()
@@ -57,7 +55,7 @@ pub async fn merge(pr_num: u64) -> Result<(), RfcMergePrError> {
         .build()
         .expect("Failed to build octocrab.");
 
-    let branch_repo = dbg!(find_branch_repo(&gh, &oc, pr_num).await)?;
+    let branch_repo = find_branch_repo(&gh, &oc, pr_num).await?;
 
     // First, gather all the information we will need
     let mut extract = ExtractInfo::new(gh, oc, pr_num, branch_repo);
@@ -67,10 +65,10 @@ pub async fn merge(pr_num: u64) -> Result<(), RfcMergePrError> {
 
     let mut in_flight = extract.prepare_to_fly(rfc_title, filename, header);
 
-    in_flight.create_tracking_issue().await?;
+    let tracking_issue = in_flight.create_tracking_issue().await?;
     /*
     in_flight.update_rfc_header_text().await?;
-    in_flight.embed_issue_number_in_rfc_filename().await?;
+    in_flight.embed_rfc_issue_number_in_rfc_filename().await?;
     in_flight.post_final_steps_for_caller_to_follow().await?;
      */
 
@@ -83,13 +81,47 @@ struct BranchRepo {
     branch: String,
 }
 
+struct OrgRepo {
+    org: &'static str,
+    repo: &'static str,
+}
+
+// const RFCS_REPO: OrgRepo = OrgRepo { org: "rust-lang", repo: "rfcs" };
+const RFCS_REPO: OrgRepo = OrgRepo { org: "pnkfx", repo: "rfcs-play" };
+
+// const RUST_REPO: OrgRepo = OrgRepo { org: "rust-lang", repo: "rust" };
+const RUST_REPO: OrgRepo = OrgRepo { org: "pnkfelix", repo: "triagebot-playpen" };
+
+impl OrgRepo {
+    fn full_name(&self) -> String { format!("{}/{}", self.org, self.repo) }
+
+    fn github_repo(&self) -> github::Repository {
+        github::Repository { full_name: self.full_name() }
+    }
+
+    fn pull_request(&self, pr_num: u64) -> github::PullRequestId {
+        github::PullRequestId {
+            repo: self.github_repo(),
+            pull_number: pr_num,
+        }
+    }
+
+    fn pulls<'oc>(&self, oc: &'oc octocrab::Octocrab) -> octocrab::pulls::PullRequestHandler<'oc> {
+        oc.pulls(self.org, self.repo)
+    }
+
+    fn issues<'oc>(&self, oc: &'oc octocrab::Octocrab) -> octocrab::issues::IssueHandler<'oc> {
+        oc.issues(self.org, self.repo)
+    }
+}
+
 async fn find_branch_repo(
     gh: &github::GithubClient,
     oc: &octocrab::Octocrab,
     pr_num: u64)
     -> anyhow::Result<BranchRepo>
 {
-    let pr_handler = oc.pulls("rust-lang", "rfcs");
+    let pr_handler = RFCS_REPO.pulls(oc);
     let pr = pr_handler.get(pr_num).await?;
     let repo = if let Some(repo) = pr.head.repo { repo } else {
         return Err(anyhow::anyhow!("no remote repo found for PR {}", pr_num).into());
@@ -124,6 +156,28 @@ struct Header {
     rust_issue: String,
 }
 
+impl Header {
+    fn feature_name(&self) -> anyhow::Result<Option<&str>> {
+        // template: "- Feature Name: `FFF`"
+        let msg = "header feature line did not match template";
+        let prefix = "- Feature Name: ";
+        let mut stripped: &str = self.feature_name
+            .strip_prefix(prefix)
+            .ok_or(anyhow::anyhow!("{}; needs to start with {}", msg, prefix))?;
+
+        stripped = stripped.trim();
+        stripped = stripped.strip_prefix("`").unwrap_or(stripped);
+        stripped = stripped.strip_suffix("`").unwrap_or(stripped);
+        stripped = stripped.trim();
+
+        match stripped {
+            "N/A" => Ok(None),
+            "" => Ok(None),
+            stripped => Ok(Some(stripped))
+        }
+    }
+}
+
 impl ExtractInfo {
     fn new(gh: github::GithubClient,
            oc: octocrab::Octocrab,
@@ -131,10 +185,7 @@ impl ExtractInfo {
            branch_repo: BranchRepo,
     ) -> Self
     {
-        let pr = github::PullRequestId {
-            repo: github::Repository { full_name: "rust-lang/rfcs".to_string() },
-            pull_number: pr_num,
-        };
+        let pr = RFCS_REPO.pull_request(pr_num);
         Self { gh, oc, pr, branch_repo }
     }
 
@@ -144,11 +195,20 @@ impl ExtractInfo {
 
     async fn find_text_filename(&mut self) -> anyhow::Result<String> {
         let file_diff_list = self.pr.get_file_list(&self.gh).await?;
-        let mut candidates = file_diff_list.iter().filter(|d|d.filename.starts_with("text/0000-"));
+        let mut candidates = file_diff_list.iter().filter(|d|d.filename.starts_with("text/"));
         let candidate = match candidates.clone().count() {
             1 => candidates.next().unwrap().filename.clone(),
-            count =>
-                return Err(anyhow::anyhow!("expected one rfc file, found {}", count)),
+            count => {
+                let filenames: Vec<_> = self
+                    .pr
+                    .get_file_list(&self.gh)
+                    .await?
+                    .iter()
+                    .map(|d|d.filename.clone())
+                    .collect();
+                return Err(anyhow::anyhow!("expected one rfc file, found {}: {:?}",
+                                           count, filenames));
+            }
         };
         Ok(candidate)
     }
@@ -204,17 +264,18 @@ impl ExtractInfo {
 }
 
 impl InFlight {
-    async fn create_tracking_issue(&mut self) -> anyhow::Result<()> {
-        // let issues = self.oc.repos("rust-lang", "rust");
-        let issues = self.oc.issues("pnkfelix", "triagebot-playpen");
+    async fn create_tracking_issue(&mut self) -> anyhow::Result<octocrab::models::issues::Issue> {
+        let issues = RUST_REPO.issues(&self.oc);
         let title = format!("Tracking Issue for RFC {NNN}: {XXX}",
                             NNN=self.pr.pull_number, XXX=self.rfc_title);
         let mut context = tera::Context::new();
-        context.insert("FEATURE", &self.header.feature_name);
+        if let Some(feature_name) = self.header.feature_name()? {
+            context.insert("FEATURE", &feature_name);
+        }
         context.insert("PR_NUM", &self.pr.pull_number);
         context.insert("TITLE", &self.rfc_title);
         let body = crate::actions::TEMPLATES.render("tracking_issue.tt", &context)?;
         let issue = issues.create(title).body(body).send().await?;
-        Ok(())
+        Ok(issue)
     }
 }

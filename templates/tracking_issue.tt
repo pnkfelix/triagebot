@@ -13,8 +13,10 @@ Such a feature should also be labeled with e.g., `F-my_feature`.
 This label is used to associate issues (e.g., bugs and design questions) to the feature.
 -->
 
-This is a tracking issue for the RFC "XXX" (rust-lang/rfcs#NNN).
-The feature gate for the issue is `#![feature(FFF)]`.
+This is a tracking issue for the RFC "{{TITLE}}" (rust-lang/rfcs#{{PR_NUM}}).
+{% if FEATURE %}
+The feature gate for the issue is `#![feature({{FEATURE}})]`.
+{% endif %}
 
 ### About tracking issues
 
