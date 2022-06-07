@@ -1098,6 +1098,98 @@ pub struct DiffEntry {
     pub previous_filename: Option<String>,
 }
 
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all="UPPERCASE")]
+pub enum DiffSide {
+    Left,
+    Right,
+}
+
+pub enum ReviewCommentDiffAddress {
+    /// This is the common case: pick a line and comment on it.
+    OneLine { commit_id: String, path: String, line_side: (u64, DiffSide) },
+    /// To comment on multiple lines (e.g. a suggestion replacing multiple lines), use this.
+    MultiLine { commit_id: String, path: String, first: (u64, DiffSide), last: (u64, DiffSide) },
+    /// Alternative way to identify the comment point
+    ReplyTo { comment_id: u64 }
+}
+
+#[derive(serde::Serialize, Debug)]
+pub struct ReviewComment {
+    /// The text of the review comment.
+    pub body: String,
+
+    /// The SHA of the commit needing a comment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_id: Option<String>,
+    /// The file needing a comment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side: Option<DiffSide>,
+    /// What line in the file's diff to comment on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_side: Option<DiffSide>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_reply_to: Option<u64>,
+}
+
+impl ReviewCommentDiffAddress {
+    pub fn comment(self, body: String) -> ReviewComment {
+        match self {
+            ReviewCommentDiffAddress::OneLine {
+                commit_id, path, line_side: (line, side),
+            } => {
+                ReviewComment {
+                    body,
+                    commit_id: Some(commit_id),
+                    path: Some(path),
+                    position: None,
+                    side: Some(side),
+                    line: Some(line),
+                    start_line: None,
+                    start_side: None,
+                    in_reply_to: None,
+                }
+            }
+            ReviewCommentDiffAddress::MultiLine {
+                commit_id, path, first: (start_line, start_side), last: (line, side)
+            } => {
+                ReviewComment {
+                    body,
+                    commit_id: Some(commit_id),
+                    path: Some(path),
+                    position: None,
+                    side: Some(side),
+                    line: Some(line),
+                    start_line: Some(start_line),
+                    start_side: Some(start_side),
+                    in_reply_to: None,
+                }
+            }
+            ReviewCommentDiffAddress::ReplyTo { comment_id } => {
+                ReviewComment {
+                    body,
+                    commit_id: None,
+                    path: None,
+                    position: None,
+                    side: None,
+                    line: None,
+                    start_line: None,
+                    start_side: None,
+                    in_reply_to: Some(comment_id),
+                }
+            }
+        }
+    }
+}
+
 impl PullRequestId {
     pub async fn get_title(&self, client: &GithubClient) -> anyhow::Result<String> {
         let url = self.build_issue_url();
@@ -1114,6 +1206,18 @@ impl PullRequestId {
             .await
             .with_context(|| format!("failed to list files from {}", url))
     }
+    pub async fn post_review_comment(&self, client: &GithubClient, comment: ReviewComment) -> anyhow::Result<Comment> {
+        let url = self.build_review_comment_url();
+        let req_builder = client.post(&url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .json(&comment);
+
+        // return Ok(dbg!(req_builder.send().await?.text().await?));
+        client.json(req_builder)
+            .await
+            .with_context(|| format!("failed to post review comment via {}", url))
+    }
+
 
     fn build_issue_url(&self) -> String
     {
@@ -1126,6 +1230,15 @@ impl PullRequestId {
     fn build_list_files_url(&self) -> String
     {
         format!("{}/repos/{}/pulls/{}/files",
+                Repository::GITHUB_API_URL,
+                self.repo.full_name,
+                self.pull_number
+        )
+    }
+
+    fn build_review_comment_url(&self) -> String
+    {
+        format!("{}/repos/{}/pulls/{}/comments",
                 Repository::GITHUB_API_URL,
                 self.repo.full_name,
                 self.pull_number

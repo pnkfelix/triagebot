@@ -1,7 +1,12 @@
-use crate::{github, logger};
+// use self::deployment::{RFCS_REPO, RUST_REPO};
+use self::testing::{RFCS_REPO, RUST_REPO};
+
+use crate::{github};
 
 use anyhow::{Context};
 use reqwest::{Client};
+
+use std::convert::TryFrom;
 
 #[cfg(not_now)]
 struct RfcMergePrInFlight<'a> {
@@ -25,9 +30,15 @@ struct RfcMergePrInFlight<'a> {
     tracking_issue_number: Option<u64>,
 }
 
+#[derive(Debug)]
 pub enum RfcMergePrError {
     Octocrab(octocrab::Error),
-    Anyhow(anyhow::Error)
+    Anyhow(anyhow::Error),
+    TryFrom(std::num::TryFromIntError),
+}
+
+impl From<std::num::TryFromIntError> for RfcMergePrError {
+    fn from(e: std::num::TryFromIntError) -> Self { RfcMergePrError::TryFrom(e) }
 }
 
 impl From<anyhow::Error> for RfcMergePrError {
@@ -41,8 +52,9 @@ impl From<octocrab::Error> for RfcMergePrError {
 impl std::fmt::Display for RfcMergePrError {
     fn fmt(&self, w: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            RfcMergePrError::Anyhow(e) => write!(w, "rfc merge error, anyhow:{}", e),
+            RfcMergePrError::Anyhow(e) => write!(w, "rfc merge error, anyhow:{:#}", e),
             RfcMergePrError::Octocrab(e) => write!(w, "rfc merge error, octocrab: {}", e),
+            RfcMergePrError::TryFrom(e) => write!(w, "rfc merge error, try_from:{:#}", e),
         }
     }
 }
@@ -66,8 +78,8 @@ pub async fn merge(pr_num: u64) -> Result<(), RfcMergePrError> {
     let mut in_flight = extract.prepare_to_fly(rfc_title, filename, header);
 
     let tracking_issue = in_flight.create_tracking_issue().await?;
+    in_flight.update_rfc_header_text(u64::try_from(tracking_issue.number)?).await?;
     /*
-    in_flight.update_rfc_header_text().await?;
     in_flight.embed_rfc_issue_number_in_rfc_filename().await?;
     in_flight.post_final_steps_for_caller_to_follow().await?;
      */
@@ -86,11 +98,17 @@ struct OrgRepo {
     repo: &'static str,
 }
 
-// const RFCS_REPO: OrgRepo = OrgRepo { org: "rust-lang", repo: "rfcs" };
-const RFCS_REPO: OrgRepo = OrgRepo { org: "pnkfx", repo: "rfcs-play" };
+mod deployment {
+    use super::OrgRepo;
+    pub(super) const RFCS_REPO: OrgRepo = OrgRepo { org: "rust-lang", repo: "rfcs" };
+    pub(super) const RUST_REPO: OrgRepo = OrgRepo { org: "rust-lang", repo: "rust" };
+}
 
-// const RUST_REPO: OrgRepo = OrgRepo { org: "rust-lang", repo: "rust" };
-const RUST_REPO: OrgRepo = OrgRepo { org: "pnkfelix", repo: "triagebot-playpen" };
+mod testing {
+    use super::OrgRepo;
+    pub(super) const RFCS_REPO: OrgRepo = OrgRepo { org: "pnkfx", repo: "rfcs-play" };
+    pub(super) const RUST_REPO: OrgRepo = OrgRepo { org: "pnkfelix", repo: "triagebot-playpen" };
+}
 
 impl OrgRepo {
     fn full_name(&self) -> String { format!("{}/{}", self.org, self.repo) }
@@ -277,5 +295,37 @@ impl InFlight {
         let body = crate::actions::TEMPLATES.render("tracking_issue.tt", &context)?;
         let issue = issues.create(title).body(body).send().await?;
         Ok(issue)
+    }
+
+    async fn update_rfc_header_text(&mut self, tracking_issue: u64) -> anyhow::Result<String> {
+        let feature_line = self.header
+            .feature_name()?
+            .map(|f|format!("- Feature Name: `{}`\n", f))
+            .unwrap_or("".to_string());
+        let body = format!("\
+```suggestion
+{FFFF_LINE}\
+{START_DATE}
+- RFC PR: [rust-lang/rfcs#{NNNN}](https://github.com/rust-lang/rfcs/pull/{NNNN})
+- Rust Issue: [rust-lang/rust#{TTTT}](https://github.com/rust-lang/rust/issues/{TTTT})
+```
+",
+                           START_DATE=self.header.start_date,
+                           FFFF_LINE=feature_line,
+                           TTTT=tracking_issue,
+                           NNNN=self.pr.pull_number);
+        let mut comment = github::ReviewCommentDiffAddress::MultiLine {
+            // FIXME: the commit is required, despite what the Github API
+            // documentation says, but obviously I should be extracting it or
+            // feeding it in from up above rather than hard coding it.
+            commit_id: "a8886a1a2d5edb9c247922e8058fb0a573f0755b".to_string(),
+            path: self.text_filename.clone(),
+            first: (1, github::DiffSide::Right),
+            last: (4, github::DiffSide::Right),
+        }.comment(body);
+        self.pr
+            .post_review_comment(&self.gh, comment)
+            .await
+            .map(|c|c.body)
     }
 }
