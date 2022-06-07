@@ -13,7 +13,7 @@ dotenv = "0.15"
 reqwest = { version = "0.11.4", features = ["json", "blocking"] }
 regex = "1"
 lazy_static = "1"
-anyhow = "1"
+anyhow = { version = "1", features = ["backtrace"] }
 hex = "0.4"
 parser = { path = "parser" }
 rust_team_data = { git = "https://github.com/rust-lang/team" }
